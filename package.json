@@ -1,0 +1,8 @@
+{
+  "dependencies": {
+    "canvas": "^3.2.0",
+    "mysql2": "^3.15.3",
+    "node-telegram-bot-api": "^0.66.0",
+    "xlsx": "^0.18.5"
+  }
+}
