@@ -1,242 +1,238 @@
-// iorepstable.js (FINAL)
-// Renders canvas with top/bottom headers, thousand format, daily integer, MoM & ppt as % with 1 decimal,
-// separators, branch/region styling, autofit.
+// =============================================
+// iorepstable.js — FINAL VERSION
+// =============================================
 
 const { createCanvas } = require("canvas");
 
-function fmtNum(n) {
-  if (n === null || n === undefined || n === "") return "";
-  return Number(n).toLocaleString("id-ID");
-}
-function fmtPct(n) {
-  if (n === null || n === undefined || n === "") return "";
-  return `${Number(n).toFixed(1)}%`;
-}
-function isNegativeNumberString(s) {
-  if (s === null || s === undefined || s === "") return false;
-  const v = Number(String(s).replace(/%/g,''));
-  return !isNaN(v) && v < 0;
+// Format ribuan
+function formatNumber(val) {
+    if (val === null || val === undefined || isNaN(val)) return "0";
+    return Number(val).toLocaleString("id-ID");
 }
 
-async function renderIOREPS(rowsRaw) {
-  // rowsRaw: array from iorepsquery.getIOREPSData
-  // Build visible rows array with consistent ordering and values formatted later
-  const rows = rowsRaw.map(r => r); // keep objects
+// Format persen dengan satu decimal
+function formatPercent(val) {
+    if (val === null || val === undefined || isNaN(val)) return "0%";
+    return Number(val).toFixed(1) + "%";
+}
 
-  // Headers
-  const headerTop = [
-    "Cluster",
-    "IO", "RE", "PS",
-    "%RE to IO", "%PS to IO", "%PS to RE"
-  ];
+async function renderIOREPS(rows) {
 
-  const headerBottom = [
-    "", // cluster
-    "Act", "Daily", "MoM",     // IO
-    "Act", "Daily", "MoM",     // RE
-    "Act", "Daily", "MoM",     // PS
-    "Act", "ppt",              // %RE to IO
-    "Act", "ppt",              // %PS to IO
-    "Act", "ppt"               // %PS to RE
-  ];
+    //----------------------------------------------------
+    // 1. HEADER TOP — FIX 16 KOLOM
+    //----------------------------------------------------
+    const headerTop = [
+        "Cluster",
+        "IO", "", "",
+        "RE", "", "",
+        "PS", "", "",
+        "%RE to IO", "",
+        "%PS to IO", "",
+        "%PS to RE", ""
+    ];
 
-  // Column count = 1 + 3 + 3 + 3 + 2 + 2 + 2 = 16
-  const colCount = headerBottom.length; // 16
+    //----------------------------------------------------
+    // 2. HEADER BOTTOM — 16 KOLOM (SAMA)
+    //----------------------------------------------------
+    const headerBottom = [
+        "   ",
+        "Act","Daily","MoM",
+        "Act","Daily","MoM",
+        "Act","Daily","MoM",
+        "Act","ppt",
+        "Act","ppt",
+        "Act","ppt"
+    ];
 
-  // Create data matrix (visible cells) and keep level (cluster/branch/region/separator)
-  const matrix = rows.map(r => {
-    if (r.level === 'separator') return { separator: true };
-
-    // build values:
-    const IO_ACT = fmtNum(r.IO_ACT);
-    const IO_DAILY = fmtNum(Math.round(Number(r.IO_DAILY || 0)));
-    const IO_MoM = fmtPct(r.IO_MoM);
-
-    const RE_ACT = fmtNum(r.RE_ACT);
-    const RE_DAILY = fmtNum(Math.round(Number(r.RE_DAILY || 0)));
-    const RE_MoM = fmtPct(r.RE_MoM);
-
-    const PS_ACT = fmtNum(r.PS_ACT);
-    const PS_DAILY = fmtNum(Math.round(Number(r.PS_DAILY || 0)));
-    const PS_MoM = fmtPct(r.PS_MoM);
-
-    const RE_to_IO = fmtPct(r.RE_to_IO);
-    const RE_to_IO_ppt = fmtPct(r.RE_to_IO_PPT);
-
-    const PS_to_IO = fmtPct(r.PS_to_IO);
-    const PS_to_IO_ppt = fmtPct(r.PS_to_IO_PPT);
-
-    const PS_to_RE = fmtPct(r.PS_to_RE);
-    const PS_to_RE_ppt = fmtPct(r.PS_to_RE_PPT);
-
-    return {
-      cells: [
-        r.label,
-        IO_ACT, IO_DAILY, IO_MoM,
-        RE_ACT, RE_DAILY, RE_MoM,
-        PS_ACT, PS_DAILY, PS_MoM,
-        RE_to_IO, RE_to_IO_ppt,
-        PS_to_IO, PS_to_IO_ppt,
-        PS_to_RE, PS_to_RE_ppt
-      ],
-      level: r.level
+    //----------------------------------------------------
+    // 3. MERGED COLUMNS (PERFECT ALIGNMENT)
+    //----------------------------------------------------
+    const mergedColumns = {
+        "IO": [1, 3],
+        "RE": [4, 6],
+        "PS": [7, 9],
+        "%RE to IO": [10, 11],
+        "%PS to IO": [12, 13],
+        "%PS to RE": [14, 15]
     };
-  });
 
-  // AUTO-FIT widths
-  const font = "16px Arial";
-  const padding = 12;
-  const tmp = createCanvas(10,10);
-  const ctx2 = tmp.getContext("2d");
-  ctx2.font = font;
+    //----------------------------------------------------
+    // 4. Convert rows → matrix
+    //----------------------------------------------------
+    const allRows = [];
 
-  // measure widths for headers and data
-  const colWidths = Array(colCount).fill(0).map((_,i) => {
-    const headerW = Math.max(
-      ctx2.measureText(headerBottom[i] || "").width,
-      ctx2.measureText(headerTop[Math.floor(i/3)] || "").width // approximate top header width
-    );
-    const dataW = Math.max(...matrix.map(r => {
-      if (r.separator) return 0;
-      const v = String(r.cells[i] || "");
-      return ctx2.measureText(v).width;
-    }), 0);
-    return Math.max(headerW, dataW) + padding * 2;
-  });
+    rows.forEach(r => {
+        if (r.separator) {
+            allRows.push({ separator: true });
+        } else {
+            allRows.push({
+                label: r.label,
 
-  // Ensure minimum widths for readability
-  for (let i=0;i<colWidths.length;i++){
-    colWidths[i] = Math.max(colWidths[i], 70);
-  }
+                IO_ACT: formatNumber(r.IO_ACT),
+                IO_DAILY: formatNumber(r.IO_DAILY),
+                IO_MoM: formatPercent(r.IO_MoM),
 
-  const rowH = 40;
-  const headerTopH = 36;
-  const headerBottomH = 36;
+                RE_ACT: formatNumber(r.RE_ACT),
+                RE_DAILY: formatNumber(r.RE_DAILY),
+                RE_MoM: formatPercent(r.RE_MoM),
 
-  const totalW = colWidths.reduce((a,b)=>a+b,0);
-  const totalH = headerTopH + headerBottomH + matrix.length * rowH;
+                PS_ACT: formatNumber(r.PS_ACT),
+                PS_DAILY: formatNumber(r.PS_DAILY),
+                PS_MoM: formatPercent(r.PS_MoM),
 
-  const canvas = createCanvas(totalW, totalH);
-  const ctx = canvas.getContext("2d");
+                RE_to_IO_ACT: formatPercent(r.RE_to_IO_ACT),
+                RE_to_IO_PPT: formatPercent(r.RE_to_IO_PPT),
 
-  // background
-  ctx.fillStyle = "#ffffff";
-  ctx.fillRect(0,0,totalW,totalH);
+                PS_to_IO_ACT: formatPercent(r.PS_to_IO_ACT),
+                PS_to_IO_PPT: formatPercent(r.PS_to_IO_PPT),
 
-  // draw top header (merged)
-  let x = 0, y = 0;
-  ctx.font = "bold 16px Arial";
-  ctx.fillStyle = "#f0f0f0";
-  ctx.fillRect(0,0,totalW,headerTopH);
-  ctx.fillStyle = "#000";
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
+                PS_to_RE_ACT: formatPercent(r.PS_to_RE_ACT),
+                PS_to_RE_PPT: formatPercent(r.PS_to_RE_PPT)
+            });
+        }
+    });
 
-  // top header spans -- we must map exactly:
-  // Cluster (col 0)
-  // IO spans cols 1..3 (Act,Daily,MoM)
-  // RE spans 4..6
-  // PS spans 7..9
-  // %RE to IO spans 10..11
-  // %PS to IO spans 12..13
-  // %PS to RE spans 14..15
+    //----------------------------------------------------
+    // 5. Build matrix 2D
+    //----------------------------------------------------
+    const matrix = allRows.map(r => {
+        if (r.separator) return new Array(16).fill("");
 
-  const spans = [
-    {label: "Cluster", from:0, to:0},
-    {label: "IO", from:1, to:3},
-    {label: "RE", from:4, to:6},
-    {label: "PS", from:7, to:9},
-    {label: "%RE to IO", from:10, to:11},
-    {label: "%PS to IO", from:12, to:13},
-    {label: "%PS to RE", from:14, to:15}
-  ];
+        return [
+            r.label,
+            r.IO_ACT, r.IO_DAILY, r.IO_MoM,
+            r.RE_ACT, r.RE_DAILY, r.RE_MoM,
+            r.PS_ACT, r.PS_DAILY, r.PS_MoM,
+            r.RE_to_IO_ACT, r.RE_to_IO_PPT,
+            r.PS_to_IO_ACT, r.PS_to_IO_PPT,
+            r.PS_to_RE_ACT, r.PS_to_RE_PPT
+        ];
+    });
 
-  spans.forEach(sp => {
-    const startX = colWidths.slice(0, sp.from).reduce((a,b)=>a+b,0);
-    const width = colWidths.slice(sp.from, sp.to+1).reduce((a,b)=>a+b,0);
-    ctx.strokeStyle = "#d0d0d0";
-    ctx.strokeRect(startX, y, width, headerTopH);
+    //----------------------------------------------------
+    // 6. AUTO WIDTH
+    //----------------------------------------------------
+    const font = "20px Arial";
+    const padding = 16;
+
+    const tmp = createCanvas(10, 10);
+    const ctx2 = tmp.getContext("2d");
+    ctx2.font = font;
+
+    const colCount = 16;
+
+    const colWidths = new Array(colCount).fill(0).map((_, i) => {
+        const wTop = ctx2.measureText(headerTop[i] || "").width;
+        const wBottom = ctx2.measureText(headerBottom[i] || "").width;
+        const wData = Math.max(...matrix.map(r => ctx2.measureText(String(r[i])).width));
+        return Math.max(wTop, wBottom, wData) + padding * 2;
+    });
+
+    //----------------------------------------------------
+    // 7. CANVAS SIZE
+    //----------------------------------------------------
+    const rowHeight = 48;
+    const headerTopHeight = 46;
+    const headerBottomHeight = 40;
+
+    const W = colWidths.reduce((a, b) => a + b, 0);
+    const H = headerTopHeight + headerBottomHeight + matrix.length * rowHeight;
+
+    //----------------------------------------------------
+    // 8. RENDER
+    //----------------------------------------------------
+    const canvas = createCanvas(W, H);
+    const ctx = canvas.getContext("2d");
+
+    ctx.fillStyle = "#fff";
+    ctx.fillRect(0, 0, W, H);
+
+    ctx.font = font;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.strokeStyle = "#000";
+
+    //----------------------------------------------------
+    // HEADER TOP
+    //----------------------------------------------------
+    let x = 0;
+    let y = 0;
+
+    ctx.fillStyle = "#d9d9d9";
+    ctx.fillRect(0, 0, W, headerTopHeight);
     ctx.fillStyle = "#000";
-    ctx.fillText(sp.label, startX + width/2, y + headerTopH/2);
-  });
 
-  // bottom header
-  y += headerTopH;
-  x = 0;
-  ctx.font = "bold 14px Arial";
-  ctx.fillStyle = "#e8e8e8";
-  ctx.fillRect(0,y,totalW,headerBottomH);
-  ctx.fillStyle = "#000";
+    let col = 0;
+    while (col < colCount) {
+        const label = headerTop[col];
+        const merge = mergedColumns[label];
 
-  for (let i=0;i<colCount;i++){
-    ctx.strokeStyle = "#d0d0d0";
-    ctx.strokeRect(x, y, colWidths[i], headerBottomH);
-    ctx.fillText(headerBottom[i], x + colWidths[i]/2, y + headerBottomH/2);
-    x += colWidths[i];
-  }
+        if (merge) {
+            const [start, end] = merge;
+            const width = colWidths.slice(start, end + 1).reduce((a, b) => a + b, 0);
+            const offset = colWidths.slice(0, start).reduce((a, b) => a + b, 0);
 
-  // data rows
-  y += headerBottomH;
-  ctx.font = "14px Arial";
+            ctx.strokeRect(offset, y, width, headerTopHeight);
+            ctx.fillText(label, offset + width / 2, y + headerTopHeight / 2);
 
-  matrix.forEach((r, rowIdx) => {
+            col = end + 1;
+        } else {
+            ctx.strokeRect(x, y, colWidths[col], headerTopHeight);
+            ctx.fillText(label || "", x + colWidths[col] / 2, y + headerTopHeight / 2);
+
+            x += colWidths[col];
+            col++;
+        }
+    }
+
+    //----------------------------------------------------
+    // HEADER BOTTOM
+    //----------------------------------------------------
+    y += headerTopHeight;
     x = 0;
-    // separator row
-    if (r.separator) {
-      // draw empty row with borders
-      for (let c=0;c<colCount;c++){
-        ctx.strokeStyle = "#e8e8e8";
-        ctx.strokeRect(x, y, colWidths[c], rowH);
-        x += colWidths[c];
-      }
-      y += rowH;
-      return;
+
+    ctx.fillStyle = "#e6e6e6";
+    ctx.fillRect(0, y, W, headerBottomHeight);
+    ctx.fillStyle = "#000";
+
+    for (let i = 0; i < colCount; i++) {
+        ctx.strokeRect(x, y, colWidths[i], headerBottomHeight);
+        ctx.fillText(headerBottom[i] || "", x + colWidths[i] / 2, y + headerBottomHeight / 2);
+        x += colWidths[i];
     }
 
-    // row background for branch/region
-    if (r.level === 'branch') {
-      ctx.fillStyle = "#f6f6f6";
-      ctx.fillRect(0, y, totalW, rowH);
-    } else if (r.level === 'region') {
-      ctx.fillStyle = "#fff4cc";
-      ctx.fillRect(0, y, totalW, rowH);
-    }
+    //----------------------------------------------------
+    // DATA ROWS
+    //----------------------------------------------------
+    y += headerBottomHeight;
 
-    // draw cells
-    for (let c=0;c<colCount;c++){
-      const val = r.cells[c] === null || r.cells[c] === undefined ? "" : String(r.cells[c]);
-      ctx.strokeStyle = "#e8e8e8";
-      ctx.strokeRect(x, y, colWidths[c], rowH);
+    matrix.forEach(row => {
+        x = 0;
 
-      // color rules: MoM cols are indexes 3,6,9 ; ppt cols indexes 11,13,15
-      const isMoM = [3,6,9].includes(c);
-      const isPPT = [11,13,15].includes(c);
+        if (row[0] === "") {
+            ctx.fillStyle = "#f5f5f5";
+            ctx.fillRect(x, y, W, rowHeight);
+            ctx.fillStyle = "#000";
+            ctx.strokeRect(x, y, W, rowHeight);
+            y += rowHeight;
+            return;
+        }
 
-      let neg = false;
-      if (isMoM || isPPT) {
-        neg = isNegativeNumberString(val);
-      } else {
-        neg = isNegativeNumberString(val);
-      }
+        row.forEach((cell, c) => {
+            const text = String(cell);
+            const isNeg = text.includes("-");
 
-      ctx.fillStyle = neg ? "red" : "#000";
+            ctx.strokeRect(x, y, colWidths[c], rowHeight);
+            ctx.fillStyle = isNeg ? "red" : "black";
+            ctx.fillText(text, x + colWidths[c] / 2, y + rowHeight / 2);
 
-      // bold for branch/region rows
-      if (r.level === 'branch' || r.level === 'region') {
-        ctx.font = "bold 14px Arial";
-      } else {
-        ctx.font = "14px Arial";
-      }
+            x += colWidths[c];
+        });
 
-      ctx.fillText(val, x + colWidths[c]/2, y + rowH/2);
+        y += rowHeight;
+    });
 
-      x += colWidths[c];
-    }
-
-    y += rowH;
-  });
-
-  return canvas.toBuffer("image/png");
+    return canvas.toBuffer("image/png");
 }
 
 module.exports = { renderIOREPS };

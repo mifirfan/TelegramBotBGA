@@ -1,288 +1,215 @@
-// iorepsquery.js (FINAL)
-// Produces rows: label, level, IO_ACT, IO_LM, IO_MoM, IO_DAILY, RE_ACT, RE_LM, RE_MoM, RE_DAILY,
-// PS_ACT, PS_LM, PS_MoM, PS_DAILY,
-// RE_to_IO, RE_to_IO_LM, RE_to_IO_PPT, PS_to_IO, PS_to_IO_LM, PS_to_IO_PPT, PS_to_RE, PS_to_RE_LM, PS_to_RE_PPT
+// =======================================
+// iorepsquery.js — FINAL VERSION
+// =======================================
 
 const pool = require("../database");
 
+// -------------------------------------------------------
+// Helper: hitung ACT & LM range + ACT_END (hari di bulan)
+// -------------------------------------------------------
 function getLastMonthRange(selectedDate) {
-  const d = new Date(selectedDate);
-  const year = d.getFullYear();
-  const month = d.getMonth() + 1;
-  const day = d.getDate();
+    const d = new Date(selectedDate);
 
-  const lmMonth = month === 1 ? 12 : month - 1;
-  const lmYear = month === 1 ? year - 1 : year;
+    const year = d.getFullYear();
+    const month = d.getMonth() + 1;
+    const day = d.getDate();
 
-  const lastDayLM = new Date(lmYear, lmMonth, 0).getDate();
-  const safeDay = Math.min(day, lastDayLM);
+    const lmMonth = month === 1 ? 12 : month - 1;
+    const lmYear = month === 1 ? year - 1 : year;
 
-  return {
-    ACT_START: `${year}-${String(month).padStart(2,"0")}-01`,
-    ACT_END:   `${year}-${String(month).padStart(2,"0")}-${String(day).padStart(2,"0")}`,
-    LM_START:  `${lmYear}-${String(lmMonth).padStart(2,"0")}-01`,
-    LM_END:    `${lmYear}-${String(lmMonth).padStart(2,"0")}-${String(safeDay).padStart(2,"0")}`,
-    ACT_END_DAY: day
-  };
+    const lastDayLM = new Date(lmYear, lmMonth, 0).getDate();
+    const safeDay = Math.min(day, lastDayLM);
+
+    const ACT_START = `${year}-${String(month).padStart(2, "0")}-01`;
+    const ACT_END = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+
+    const LM_START = `${lmYear}-${String(lmMonth).padStart(2, "0")}-01`;
+    const LM_END = `${lmYear}-${String(lmMonth).padStart(2, "0")}-${String(safeDay).padStart(2, "0")}`;
+
+    return { ACT_START, ACT_END, LM_START, LM_END, ACT_END_DAY: day };
 }
 
+// -------------------------------------------------------
+// Query Final IOREPS (Cluster + Branch + Region)
+// -------------------------------------------------------
 async function getIOREPSData(selectedDate) {
-  const R = getLastMonthRange(selectedDate);
-  const dayCount = R.ACT_END_DAY;
+    const { ACT_START, ACT_END, LM_START, LM_END, ACT_END_DAY } =
+        getLastMonthRange(selectedDate);
 
-  console.log("ACT RANGE:", R.ACT_START, "→", R.ACT_END);
-  console.log("LM  RANGE:", R.LM_START, "→", R.LM_END);
+    console.log("ACT RANGE:", ACT_START, "→", ACT_END);
+    console.log("LM  RANGE:", LM_START, "→", LM_END);
 
-  // Helper subquery base returns ACT and LM by grouping entity + type
-  // 1) CLUSTER
-  const clusterSQL = `
-    SELECT
-      cluster AS label,
-      'cluster' AS level,
-      SUM(CASE WHEN type='IO' THEN ACT ELSE 0 END) AS IO_ACT,
-      SUM(CASE WHEN type='IO' THEN LM  ELSE 0 END) AS IO_LM,
-      ROUND(
-        (SUM(CASE WHEN type='IO' THEN ACT ELSE 0 END) - SUM(CASE WHEN type='IO' THEN LM ELSE 0 END))
-        / NULLIF(SUM(CASE WHEN type='IO' THEN LM ELSE 0 END),0) * 100,1
-      ) AS IO_MoM,
+    // ------------------------------
+    // QUERY CLUSTER
+    // ------------------------------
+    const clusterSQL = `
+        SELECT
+            cluster AS label,
+            type,
 
-      SUM(CASE WHEN type='RE' THEN ACT ELSE 0 END) AS RE_ACT,
-      SUM(CASE WHEN type='RE' THEN LM  ELSE 0 END) AS RE_LM,
-      ROUND(
-        (SUM(CASE WHEN type='RE' THEN ACT ELSE 0 END) - SUM(CASE WHEN type='RE' THEN LM ELSE 0 END))
-        / NULLIF(SUM(CASE WHEN type='RE' THEN LM ELSE 0 END),0) * 100,1
-      ) AS RE_MoM,
+            SUM(CASE WHEN tgl BETWEEN '${ACT_START}' AND '${ACT_END}' THEN jml END) AS ACT,
+            SUM(CASE WHEN tgl BETWEEN '${LM_START}' AND '${LM_END}' THEN jml END) AS LM
 
-      SUM(CASE WHEN type='PS' THEN ACT ELSE 0 END) AS PS_ACT,
-      SUM(CASE WHEN type='PS' THEN LM  ELSE 0 END) AS PS_LM,
-      ROUND(
-        (SUM(CASE WHEN type='PS' THEN ACT ELSE 0 END) - SUM(CASE WHEN type='PS' THEN LM ELSE 0 END))
-        / NULLIF(SUM(CASE WHEN type='PS' THEN LM ELSE 0 END),0) * 100,1
-      ) AS PS_MoM
+        FROM fmc_mirror.ih_ioreps_dd
+        WHERE region = 'EASTERN JABOTABEK'
+        GROUP BY cluster, type
+        ORDER BY FIELD(cluster,
+            'Kota Bekasi',
+            'Depok',
+            'Bogor',
+            'Sukabumi',
+            'Bekasi',
+            'Karawang Purwakarta'
+        )
+    `;
 
-    FROM (
-      SELECT cluster, type,
-        SUM(CASE WHEN tgl BETWEEN '${R.ACT_START}' AND '${R.ACT_END}' THEN jml ELSE 0 END) AS ACT,
-        SUM(CASE WHEN tgl BETWEEN '${R.LM_START}'  AND '${R.LM_END}'  THEN jml ELSE 0 END) AS LM
-      FROM fmc_mirror.ih_ioreps_dd
-      WHERE region = 'EASTERN JABOTABEK'
-      GROUP BY cluster, type
-    ) AS base
-    GROUP BY cluster
-    ORDER BY FIELD(cluster,
-      'Kota Bekasi','Depok','Bogor','Sukabumi','Bekasi','Karawang Purwakarta');
-  `;
+    const [clusterRows] = await pool.query(clusterSQL);
 
-  const [clusterRows] = await pool.query(clusterSQL);
+    // ------------------------------
+    // QUERY BRANCH
+    // ------------------------------
+    const branchSQL = `
+        SELECT
+            branch AS label,
+            type,
 
-  // compute ratios and daily for clusters
-  const clustersFinal = clusterRows.map(r => {
-    const ioAct = Number(r.IO_ACT || 0);
-    const ioLm  = Number(r.IO_LM  || 0);
-    const reAct = Number(r.RE_ACT || 0);
-    const reLm  = Number(r.RE_LM  || 0);
-    const psAct = Number(r.PS_ACT || 0);
-    const psLm  = Number(r.PS_LM  || 0);
+            SUM(CASE WHEN tgl BETWEEN '${ACT_START}' AND '${ACT_END}' THEN jml END) AS ACT,
+            SUM(CASE WHEN tgl BETWEEN '${LM_START}' AND '${LM_END}' THEN jml END) AS LM
 
-    const RE_to_IO = ioAct === 0 ? 0 : Number(((reAct / ioAct) * 100).toFixed(1));
-    const RE_to_IO_LM = ioLm === 0 ? 0 : Number(((reLm / ioLm) * 100).toFixed(1));
-    const RE_to_IO_PPT = Number((RE_to_IO - RE_to_IO_LM).toFixed(1));
+        FROM fmc_mirror.ih_ioreps_dd
+        WHERE region = 'EASTERN JABOTABEK'
+        GROUP BY branch, type
+        ORDER BY branch
+    `;
 
-    const PS_to_IO = ioAct === 0 ? 0 : Number(((psAct / ioAct) * 100).toFixed(1));
-    const PS_to_IO_LM = ioLm === 0 ? 0 : Number(((psLm / ioLm) * 100).toFixed(1));
-    const PS_to_IO_PPT = Number((PS_to_IO - PS_to_IO_LM).toFixed(1));
+    const [branchRows] = await pool.query(branchSQL);
 
-    const PS_to_RE = reAct === 0 ? 0 : Number(((psAct / reAct) * 100).toFixed(1));
-    const PS_to_RE_LM = reLm === 0 ? 0 : Number(((psLm / reLm) * 100).toFixed(1));
-    const PS_to_RE_PPT = Number((PS_to_RE - PS_to_RE_LM).toFixed(1));
+    // ------------------------------
+    // QUERY REGION
+    // ------------------------------
+    const regionSQL = `
+        SELECT
+            'EASTERN JABOTABEK' AS label,
+            type,
 
-    return {
-      label: r.label,
-      level: 'cluster',
+            SUM(CASE WHEN tgl BETWEEN '${ACT_START}' AND '${ACT_END}' THEN jml END) AS ACT,
+            SUM(CASE WHEN tgl BETWEEN '${LM_START}' AND '${LM_END}' THEN jml END) AS LM
 
-      IO_ACT: ioAct,
-      IO_LM: ioLm,
-      IO_MoM: r.IO_MoM === null ? 0 : Number(r.IO_MoM),
-      IO_DAILY: Math.round(ioAct / dayCount),
+        FROM fmc_mirror.ih_ioreps_dd
+        WHERE region = 'EASTERN JABOTABEK'
+        GROUP BY type
+    `;
 
-      RE_ACT: reAct,
-      RE_LM: reLm,
-      RE_MoM: r.RE_MoM === null ? 0 : Number(r.RE_MoM),
-      RE_DAILY: Math.round(reAct / dayCount),
+    const [regionRows] = await pool.query(regionSQL);
 
-      PS_ACT: psAct,
-      PS_LM: psLm,
-      PS_MoM: r.PS_MoM === null ? 0 : Number(r.PS_MoM),
-      PS_DAILY: Math.round(psAct / dayCount),
+    // ---------------------------------------------------------
+    // Convert base rows → final rows (ACT, LM, MoM, Daily, Ratio, PPT)
+    // ---------------------------------------------------------
+    function convertRows(rows) {
+        const map = {};
 
-      RE_to_IO, RE_to_IO_LM, RE_to_IO_PPT,
-      PS_to_IO, PS_to_IO_LM, PS_to_IO_PPT,
-      PS_to_RE, PS_to_RE_LM, PS_to_RE_PPT
-    };
-  });
+        rows.forEach(r => {
+            if (!map[r.label]) {
+                map[r.label] = {
+                    label: r.label,
+                    IO_ACT: 0, IO_LM: 0,
+                    RE_ACT: 0, RE_LM: 0,
+                    PS_ACT: 0, PS_LM: 0,
 
-  // blank separator before branch
-  const blank1 = [{ label: "", level: "separator" }];
+                    IO_MoM: 0,
+                    RE_MoM: 0,
+                    PS_MoM: 0,
 
-  // 2) BRANCH
-  const branchSQL = `
-    SELECT
-      branch AS label,
-      SUM(CASE WHEN type='IO' THEN ACT ELSE 0 END) AS IO_ACT,
-      SUM(CASE WHEN type='IO' THEN LM  ELSE 0 END) AS IO_LM,
-      ROUND((SUM(CASE WHEN type='IO' THEN ACT ELSE 0 END) - SUM(CASE WHEN type='IO' THEN LM ELSE 0 END)) / NULLIF(SUM(CASE WHEN type='IO' THEN LM ELSE 0 END),0)*100,1) AS IO_MoM,
+                    IO_DAILY: 0,
+                    RE_DAILY: 0,
+                    PS_DAILY: 0,
 
-      SUM(CASE WHEN type='RE' THEN ACT ELSE 0 END) AS RE_ACT,
-      SUM(CASE WHEN type='RE' THEN LM  ELSE 0 END) AS RE_LM,
-      ROUND((SUM(CASE WHEN type='RE' THEN ACT ELSE 0 END) - SUM(CASE WHEN type='RE' THEN LM ELSE 0 END)) / NULLIF(SUM(CASE WHEN type='RE' THEN LM ELSE 0 END),0)*100,1) AS RE_MoM,
+                    RE_to_IO_ACT: 0,
+                    PS_to_IO_ACT: 0,
+                    PS_to_RE_ACT: 0,
 
-      SUM(CASE WHEN type='PS' THEN ACT ELSE 0 END) AS PS_ACT,
-      SUM(CASE WHEN type='PS' THEN LM  ELSE 0 END) AS PS_LM,
-      ROUND((SUM(CASE WHEN type='PS' THEN ACT ELSE 0 END) - SUM(CASE WHEN type='PS' THEN LM ELSE 0 END)) / NULLIF(SUM(CASE WHEN type='PS' THEN LM ELSE 0 END),0)*100,1) AS PS_MoM
+                    RE_to_IO_PPT: 0,
+                    PS_to_IO_PPT: 0,
+                    PS_to_RE_PPT: 0
+                };
+            }
 
-    FROM (
-      SELECT branch, type,
-        SUM(CASE WHEN tgl BETWEEN '${R.ACT_START}' AND '${R.ACT_END}' THEN jml ELSE 0 END) AS ACT,
-        SUM(CASE WHEN tgl BETWEEN '${R.LM_START}'  AND '${R.LM_END}'  THEN jml ELSE 0 END) AS LM
-      FROM fmc_mirror.ih_ioreps_dd
-      WHERE region = 'EASTERN JABOTABEK'
-      GROUP BY branch, type
-    ) AS base
-    GROUP BY branch
-    ORDER BY branch;
-  `;
+            const row = map[r.label];
 
-  const [branchRows] = await pool.query(branchSQL);
+            if (r.type === "IO") {
+                row.IO_ACT = r.ACT || 0;
+                row.IO_LM = r.LM || 0;
+            }
+            if (r.type === "RE") {
+                row.RE_ACT = r.ACT || 0;
+                row.RE_LM = r.LM || 0;
+            }
+            if (r.type === "PS") {
+                row.PS_ACT = r.ACT || 0;
+                row.PS_LM = r.LM || 0;
+            }
+        });
 
-  const branchesFinal = branchRows.map(r => {
-    const ioAct = Number(r.IO_ACT || 0);
-    const ioLm  = Number(r.IO_LM  || 0);
-    const reAct = Number(r.RE_ACT || 0);
-    const reLm  = Number(r.RE_LM  || 0);
-    const psAct = Number(r.PS_ACT || 0);
-    const psLm  = Number(r.PS_LM  || 0);
+        // Hitung semua metrik
+        Object.values(map).forEach(r => {
 
-    const RE_to_IO = ioAct === 0 ? 0 : Number(((reAct / ioAct) * 100).toFixed(1));
-    const RE_to_IO_LM = ioLm === 0 ? 0 : Number(((reLm / ioLm) * 100).toFixed(1));
-    const RE_to_IO_PPT = Number((RE_to_IO - RE_to_IO_LM).toFixed(1));
+            // MoM %
+            r.IO_MoM = calcMom(r.IO_ACT, r.IO_LM);
+            r.RE_MoM = calcMom(r.RE_ACT, r.RE_LM);
+            r.PS_MoM = calcMom(r.PS_ACT, r.PS_LM);
 
-    const PS_to_IO = ioAct === 0 ? 0 : Number(((psAct / ioAct) * 100).toFixed(1));
-    const PS_to_IO_LM = ioLm === 0 ? 0 : Number(((psLm / ioLm) * 100).toFixed(1));
-    const PS_to_IO_PPT = Number((PS_to_IO - PS_to_IO_LM).toFixed(1));
+            // Daily (tanpa decimal)
+            r.IO_DAILY = Math.round(r.IO_ACT / ACT_END_DAY);
+            r.RE_DAILY = Math.round(r.RE_ACT / ACT_END_DAY);
+            r.PS_DAILY = Math.round(r.PS_ACT / ACT_END_DAY);
 
-    const PS_to_RE = reAct === 0 ? 0 : Number(((psAct / reAct) * 100).toFixed(1));
-    const PS_to_RE_LM = reLm === 0 ? 0 : Number(((psLm / reLm) * 100).toFixed(1));
-    const PS_to_RE_PPT = Number((PS_to_RE - PS_to_RE_LM).toFixed(1));
+            // Ratio ACT %
+            r.RE_to_IO_ACT = ratio(r.RE_ACT, r.IO_ACT);
+            r.PS_to_IO_ACT = ratio(r.PS_ACT, r.IO_ACT);
+            r.PS_to_RE_ACT = ratio(r.PS_ACT, r.RE_ACT);
 
-    return {
-      label: r.label,
-      level: 'branch',
+            // PPT = ACT ratio difference - LM ratio difference
+            r.RE_to_IO_PPT = ppt(r.RE_ACT, r.IO_ACT, r.RE_LM, r.IO_LM);
+            r.PS_to_IO_PPT = ppt(r.PS_ACT, r.IO_ACT, r.PS_LM, r.IO_LM);
+            r.PS_to_RE_PPT = ppt(r.PS_ACT, r.RE_ACT, r.PS_LM, r.RE_LM);
+        });
 
-      IO_ACT: ioAct,
-      IO_LM: ioLm,
-      IO_MoM: r.IO_MoM === null ? 0 : Number(r.IO_MoM),
-      IO_DAILY: Math.round(ioAct / dayCount),
+        return Object.values(map);
+    }
 
-      RE_ACT: reAct,
-      RE_LM: reLm,
-      RE_MoM: r.RE_MoM === null ? 0 : Number(r.RE_MoM),
-      RE_DAILY: Math.round(reAct / dayCount),
+    // --- helper untuk MoM ---
+    function calcMom(act, lm) {
+        if (!lm || lm === 0) return 0;
+        return Number((((act - lm) / lm) * 100).toFixed(1));
+    }
 
-      PS_ACT: psAct,
-      PS_LM: psLm,
-      PS_MoM: r.PS_MoM === null ? 0 : Number(r.PS_MoM),
-      PS_DAILY: Math.round(psAct / dayCount),
+    // --- helper ratio % ---
+    function ratio(a, b) {
+        if (!b || b === 0) return 0;
+        return Number(((a / b) * 100).toFixed(1));
+    }
 
-      RE_to_IO, RE_to_IO_LM, RE_to_IO_PPT,
-      PS_to_IO, PS_to_IO_LM, PS_to_IO_PPT,
-      PS_to_RE, PS_to_RE_LM, PS_to_RE_PPT
-    };
-  });
+    // --- helper ppt ---
+    function ppt(actA, actB, lmA, lmB) {
+        const actRatio = ratio(actA, actB);
+        const lmRatio = ratio(lmA, lmB);
+        return Number((actRatio - lmRatio).toFixed(1));
+    }
 
-  // blank before region
-  const blank2 = [{ label: "", level: "separator" }];
+    // ---------------------------
+    // Gabungkan cluster → branch → region
+    // ---------------------------
+    return [
+        ...convertRows(clusterRows),
 
-  // 3) REGION total (EASTERN JABOTABEK)
-  const regionSQL = `
-    SELECT
-      'EASTERN JABOTABEK' AS label,
-      SUM(CASE WHEN type='IO' THEN ACT ELSE 0 END) AS IO_ACT,
-      SUM(CASE WHEN type='IO' THEN LM  ELSE 0 END) AS IO_LM,
-      ROUND((SUM(CASE WHEN type='IO' THEN ACT ELSE 0 END) - SUM(CASE WHEN type='IO' THEN LM ELSE 0 END)) / NULLIF(SUM(CASE WHEN type='IO' THEN LM ELSE 0 END),0)*100,1) AS IO_MoM,
+        { separator: true },  // jeda
 
-      SUM(CASE WHEN type='RE' THEN ACT ELSE 0 END) AS RE_ACT,
-      SUM(CASE WHEN type='RE' THEN LM  ELSE 0 END) AS RE_LM,
-      ROUND((SUM(CASE WHEN type='RE' THEN ACT ELSE 0 END) - SUM(CASE WHEN type='RE' THEN LM ELSE 0 END)) / NULLIF(SUM(CASE WHEN type='RE' THEN LM ELSE 0 END),0)*100,1) AS RE_MoM,
+        ...convertRows(branchRows),
 
-      SUM(CASE WHEN type='PS' THEN ACT ELSE 0 END) AS PS_ACT,
-      SUM(CASE WHEN type='PS' THEN LM  ELSE 0 END) AS PS_LM,
-      ROUND((SUM(CASE WHEN type='PS' THEN ACT ELSE 0 END) - SUM(CASE WHEN type='PS' THEN LM ELSE 0 END)) / NULLIF(SUM(CASE WHEN type='PS' THEN LM ELSE 0 END),0)*100,1) AS PS_MoM
+        { separator: true },  // jeda
 
-    FROM (
-      SELECT type,
-        SUM(CASE WHEN tgl BETWEEN '${R.ACT_START}' AND '${R.ACT_END}' THEN jml ELSE 0 END) AS ACT,
-        SUM(CASE WHEN tgl BETWEEN '${R.LM_START}'  AND '${R.LM_END}'  THEN jml ELSE 0 END) AS LM
-      FROM fmc_mirror.ih_ioreps_dd
-      WHERE region = 'EASTERN JABOTABEK'
-      GROUP BY type
-    ) AS base;
-  `;
-
-  const [regionRows] = await pool.query(regionSQL);
-
-  const regionsFinal = regionRows.map(r => {
-    const ioAct = Number(r.IO_ACT || 0);
-    const ioLm  = Number(r.IO_LM  || 0);
-    const reAct = Number(r.RE_ACT || 0);
-    const reLm  = Number(r.RE_LM || 0);
-    const psAct = Number(r.PS_ACT || 0);
-    const psLm  = Number(r.PS_LM || 0);
-
-    const RE_to_IO = ioAct === 0 ? 0 : Number(((reAct / ioAct) * 100).toFixed(1));
-    const RE_to_IO_LM = ioLm === 0 ? 0 : Number(((reLm / ioLm) * 100).toFixed(1));
-    const RE_to_IO_PPT = Number((RE_to_IO - RE_to_IO_LM).toFixed(1));
-
-    const PS_to_IO = ioAct === 0 ? 0 : Number(((psAct / ioAct) * 100).toFixed(1));
-    const PS_to_IO_LM = ioLm === 0 ? 0 : Number(((psLm / ioLm) * 100).toFixed(1));
-    const PS_to_IO_PPT = Number((PS_to_IO - PS_to_IO_LM).toFixed(1));
-
-    const PS_to_RE = reAct === 0 ? 0 : Number(((psAct / reAct) * 100).toFixed(1));
-    const PS_to_RE_LM = reLm === 0 ? 0 : Number(((psLm / reLm) * 100).toFixed(1));
-    const PS_to_RE_PPT = Number((PS_to_RE - PS_to_RE_LM).toFixed(1));
-
-    return {
-      label: r.label,
-      level: 'region',
-
-      IO_ACT: ioAct,
-      IO_LM: ioLm,
-      IO_MoM: r.IO_MoM === null ? 0 : Number(r.IO_MoM),
-      IO_DAILY: Math.round(ioAct / dayCount),
-
-      RE_ACT: reAct,
-      RE_LM: reLm,
-      RE_MoM: r.RE_MoM === null ? 0 : Number(r.RE_MoM),
-      RE_DAILY: Math.round(reAct / dayCount),
-
-      PS_ACT: psAct,
-      PS_LM: psLm,
-      PS_MoM: r.PS_MoM === null ? 0 : Number(r.PS_MoM),
-      PS_DAILY: Math.round(psAct / dayCount),
-
-      RE_to_IO, RE_to_IO_LM, RE_to_IO_PPT,
-      PS_to_IO, PS_to_IO_LM, PS_to_IO_PPT,
-      PS_to_RE, PS_to_RE_LM, PS_to_RE_PPT
-    };
-  });
-
-  // final stack: clusters, separator, branches, separator, region
-  return [
-    ...clustersFinal,
-    ...blank1,
-    ...branchesFinal,
-    ...blank2,
-    ...regionsFinal
-  ];
+        ...convertRows(regionRows)
+    ];
 }
 
 module.exports = { getIOREPSData };
