@@ -70,7 +70,10 @@ bot.onText(/\/ioreps/, (msg) => {
                 [{ text: "📅 IOREPS Custom", callback_data: "ioreps_customize" }],
                 [{ text: "⚡ IOREPS Summary", callback_data: "ioreps_recent" }],
                 [{ text: "📅 IO,RE,PS Channel Custom", callback_data: "iorepschannel_customize" }],
-                [{ text: "⚡ IO,RE,PS Channel Summary", callback_data: "iorepschannel_recent" }]
+                [{ text: "⚡ IO,RE,PS Channel Summary", callback_data: "iorepschannel_recent" }],
+                [{ text: "⚡ PS Product" , callback_data: "psproduct" }],
+                [{ text: "⚡ PS Product EZNet by channel (coming soon)", callback_data: "psproduct_eznet" }],
+                [{ text: "⚡ PS Product Tsel One by channel (coming soon)", callback_data: "psproduct_tselone" }]
             ]
         }
     });
@@ -292,7 +295,7 @@ bot.on("callback_query", async (query) => {
     }
 
 // =======================================================
-// IOREPS RECENTLY — tanggal terbaru otomatis + IO CHANNEL
+// IOREPS RECENTLY — tanggal terbaru otomatis
 // =======================================================
 if (data === "ioreps_recent") {
     bot.sendMessage(chatId, "⚡ Mengambil data IOREPS terbaru...");
@@ -410,6 +413,41 @@ if (data === "iorepschannel_recent") {
     } catch (err) {
         console.error("RECENT ERROR:", err);
         bot.sendMessage(chatId, "❌ Gagal membuat RE Channel Summary");
+    }
+}
+
+// =======================================================
+// PS Product SUMMARY — tanggal terbaru otomatis
+// =======================================================
+if (data === "psproduct") {
+    bot.sendMessage(chatId, "⚡ Mengambil data PS Product Summary...");
+
+    try {
+        const [latest] = await pool.query(`
+            SELECT DATE(MAX(ps_date)) AS latest
+            FROM fmc_mirror.ih_ps_summary
+        `);
+
+        const latestDate = formatDate(latest[0].latest);
+
+        bot.sendMessage(chatId, `⏳ Membuat PS Product Summary (*${latestDate}*) ...`, {
+            parse_mode: "Markdown"
+        });
+
+        // ---------------- PSProduct ----------------
+       const { getPSProductData } = require("./ioreps/psproductquery");
+       const { renderPSProduct } = require("./ioreps/psproducttable");
+
+
+            const psproductRowss = await getPSProductData(latestDate);
+            const img = await renderPSProduct(psproductRowss);
+            await bot.sendPhoto(chatId, img, {
+            caption: `📌 PS Product (${latestDate})`
+        });
+
+    } catch (err) {
+        console.error("RECENT ERROR:", err);
+        bot.sendMessage(chatId, "❌ Gagal membuat PS Product Summary");
     }
 }
 
